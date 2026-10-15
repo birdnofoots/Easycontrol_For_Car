@@ -51,8 +51,13 @@ android {
     release {
       buildConfigField "boolean", "ENABLE_DEBUG_FEATURE", "false"
       debuggable false
-      minifyEnabled true
-      shrinkResources true
+      // 关闭 R8 混淆/裁剪：经真机实测，开启 minify 后 R8 full mode 会破坏
+      // 现有代码（static 单例/hiddenapi 反射相关），表现为启动后 onPause() 抛 NPE
+      // （Attempt to read from field on a null object reference）。
+      // 已确认仅 proguard 规则不足以修复，故保持与 debug 相同的代码形态，
+      // 仅保留 debuggable=false 等 release 特性。如需体积优化，需先补充完整 keep 规则并在真机回归。
+      minifyEnabled false
+      shrinkResources false
       proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
       if (System.getenv("ANDROID_KEYSTORE_PATH")) {
         signingConfig signingConfigs.release
