@@ -79,12 +79,32 @@
 
 | 来源 | 链接 | 说明 |
 |---|---|---|
-| **Release（推荐）** | [v1.7.0](https://github.com/birdnofoots/Easycontrol_For_Car/releases/tag/v1.7.0) | 稳定版，`versionCode 10700` / `versionName 1.7.0` |
-| 直接下载 APK | [Easycontrol_For_Car-v1.7.0-multiaddr-debug.apk](https://github.com/birdnofoots/Easycontrol_For_Car/releases/download/v1.7.0/Easycontrol_For_Car-v1.7.0-multiaddr-debug.apk) | debug 签名（debug keystore），可直接安装 |
+| **Release（推荐）** | [v1.7.0](https://github.com/birdnofoots/Easycontrol_For_Car/releases/tag/v1.7.0) | `versionCode 10700` / `versionName 1.7.0` |
+| 直接下载（release） | [Easycontrol_For_Car-v1.7.0-release.apk](https://github.com/birdnofoots/Easycontrol_For_Car/releases/download/v1.7.0/Easycontrol_For_Car-v1.7.0-release.apk) | `debuggable=false`，4.3 MB，**推荐** |
+| 直接下载（debug） | [Easycontrol_For_Car-v1.7.0-debug.apk](https://github.com/birdnofoots/Easycontrol_For_Car/releases/download/v1.7.0/Easycontrol_For_Car-v1.7.0-debug.apk) | 含调试特性，4.9 MB |
 | CI 最新构建 | [Actions](https://github.com/birdnofoots/Easycontrol_For_Car/actions) | 每次构建产物，artifact 保留 14 天 |
 
-> ⚠️ 以上为 **debug 签名** 的构建。首次安装若已装过其它签名的同包名应用，需先卸载。
-> 如需正式签名版本，请参考 [HOW_TO_BUILD.md](./HOW_TO_BUILD.md) 自行编译并签名。
+#### 🔐 签名
+
+本版本起使用**固定签名密钥**（此前每次 CI 构建都会生成随机 debug 密钥，
+导致 APK 之间无法互相覆盖安装）。两个变体使用同一把密钥，可互相覆盖安装。
+
+| 项 | 值 |
+|---|---|
+| 证书主体 | `CN=Easycontrol For Car (Fork), OU=birdnofoots, O=Easycontrol_For_Car` |
+| 密钥算法 | RSA 4096 / SHA384withRSA（有效期至 2054-03-02） |
+| **证书 SHA1** | `C9:E6:08:39:91:A9:C6:3D:7A:0C:DE:11:05:03:48:99:E8:1B:65:13` |
+| 签名方案 | v1 + v2 + v3 |
+
+核对方法：`keytool -printcert -jarfile 你的.apk`
+
+> ⚠️ 由于更换了签名密钥，**从旧包升级（原版 / 早期构建 / 第三方重签名版）
+> 必须先卸载一次**；自 v1.7.0（固定签名）起，之后所有版本都能直接覆盖安装。
+> 若设备上存在**应用分身**（独立用户）里的同包名残留，也会触发
+> `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，需一并卸载：
+> `pm uninstall --user <分身用户ID> top.eiyooooo.easycontrol.app`
+>
+> 备份建议：升级前可备份应用数据目录 `databases/app.db`（含设备地址池配置）。
 
 ### 原版
 
@@ -125,6 +145,10 @@
   - `Adb.adbMap` 改用 `ConcurrentHashMap`；`copyDevice` 空列表回退到 `address`
   - 保存设备时比较完整地址列表（原来只比第一个地址）
   - versionCode/versionName 对齐 1.7.0 (10700)
+- 🔐 构建改为**固定签名**（GitHub Secrets 注入密钥库），解决每次 CI 构建
+  签名随机导致无法覆盖安装的问题；一次构建产出 debug + release 双包
+- 🐛 release 关闭 R8 混淆：真机实测混淆后启动即崩（`MainActivity.onPause()` NPE），
+  本项目依赖 hidden API bypass / 反射，混淆风险高，暂不开启
 
 ### v1.6.10 — 原版基线
 - 来自上游 [eiyooooo/Easycontrol_For_Car](https://github.com/eiyooooo/Easycontrol_For_Car) 同步
