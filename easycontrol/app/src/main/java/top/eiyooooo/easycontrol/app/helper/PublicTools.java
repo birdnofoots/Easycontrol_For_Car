@@ -226,7 +226,7 @@ public class PublicTools {
       LinearLayout.LayoutParams editLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 5f);
       edit.setLayoutParams(editLp);
       // 限定可输入字符：数字、字母、[]-.:* 和下划线（与旧地址框一致 + 下划线/中文域名）
-      edit.setDigits("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ[]-.:*_/");
+      edit.setKeyListener(android.text.method.DigitsKeyListener.getInstance("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ[]-.:*_/"));
       edit.setTextColor(context.getResources().getColor(R.color.onCardBackground));
       edit.setHint(context.getString(R.string.add_device_address_hint));
       edit.setTextSize(TypedValue.COMPLEX_UNIT_PX, context.getResources().getDimension(R.dimen.smallFont));
