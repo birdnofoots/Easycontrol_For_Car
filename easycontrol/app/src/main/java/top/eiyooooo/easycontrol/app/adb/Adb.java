@@ -67,18 +67,22 @@ public class Adb {
     connect(keyPair);
   }
 
-  // 多地址：按顺序逐个尝试（兼容旧的"任一可用即可"语义）
+  // 多地址：并行竞速，选取"TCP 连得上 且 ADB 认证通过"的第一个地址
   public Adb(String uuid, List<String> addresses, AdbKeyPair keyPair) throws Exception {
     this.uuid = uuid;
-    channel = tryConnectAny(addresses, false);
-    connect(keyPair);
+    Pair<TcpChannel, Integer> r = tryConnectAny(addresses, false, keyPair);
+    channel = r.first;
+    MAX_DATA = r.second;
+    finishConnect();
     startServerThread.start();
   }
 
   public Adb(List<String> addresses, AdbKeyPair keyPair) throws Exception {
     this.uuid = null;
-    channel = tryConnectAny(addresses, true);
-    connect(keyPair);
+    Pair<TcpChannel, Integer> r = tryConnectAny(addresses, true, keyPair);
+    channel = r.first;
+    MAX_DATA = r.second;
+    finishConnect();
   }
 
   public Adb(String uuid, UsbDevice usbDevice, AdbKeyPair keyPair) throws Exception {
@@ -88,30 +92,35 @@ public class Adb {
     startServerThread.start();
   }
 
-  // 并行尝试多个地址，返回最早成功建立的 TcpChannel，全部失败则抛异常。
+  // 并行竞速多个地址，返回最早"TCP 连接成功 且 ADB 认证通过"的 <channel, maxData>。
   //
-  // 关键：必须"先完成者优先"，不能按列表顺序等待。
-  // 经验数据（真机实测）：列表第 1 个地址不可达时，TCP 失败要耗近 4s
-  // （No route to host 也要等到内核超时）；若按提交顺序逐个 get()，
-  // 就会被这个不可达地址拖住近 4s，而 Client 的连接看门狗只有 5s，
-  // 后面本可 0.1s 连上的地址也来不及用 —— 表现为"第一个地址不通就整体连不上"。
-  // 改用 ExecutorCompletionService，谁先连上就用谁（通常 0.1~1.5s）。
-  //
-  // - 单地址走原路径，避免线程开销
-  // - 全局 deadline 4.5s（小于看门狗 5s），所有任务共享同一截止时间
-  // - 放弃等待后仍可能有线程建连成功，必须显式关闭，否则 socket 泄漏
-  private static TcpChannel tryConnectAny(List<String> addresses, boolean test) throws Exception {
+  // 两条真机踩出来的关键经验：
+  //  1) 必须"先完成者优先"，不能按列表顺序等待。
+  //     列表第 1 个地址不可达时，TCP 失败可能耗近 4s（No route to host 也要等内核超时），
+  //     会把后面本可秒连的地址一起拖过 Client 的 5s 连接看门狗。
+  //  2) **TCP 连得上 != ADB 可用**。
+  //     某些地址能完成三次握手，但 ADB 握手会被丢弃/重置（等价于 adb 的 "device offline"），
+  //     例如被容器/VPN 接管网段、MTU 黑洞、单向 NAT 等场景。
+  //     因此认证必须放进竞速里：只有认证也通过的地址才算可用；
+  //     否则会选中一个"半通"地址，导致整体连不上、又不会回落到其它地址。
+  private static Pair<TcpChannel, Integer> tryConnectAny(List<String> addresses, boolean test, AdbKeyPair keyPair) throws Exception {
     if (addresses == null || addresses.isEmpty()) {
       throw new IOException("no address available");
     }
     if (addresses.size() == 1) {
       Pair<String, Integer> p = PublicTools.getIpAndPort(addresses.get(0));
-      return new TcpChannel(p.first, p.second, test);
+      TcpChannel ch = new TcpChannel(p.first, p.second, test);
+      try {
+        return new Pair<>(ch, authChannel(ch, keyPair));
+      } catch (Exception e) {
+        ch.close();
+        throw e;
+      }
     }
     final ExecutorService exec = Executors.newCachedThreadPool();
-    final CompletionService<TcpChannel> completion = new ExecutorCompletionService<>(exec);
-    // 唯一登记的"已连上"连接：只有第一个成功的任务能登记（CAS 保证唯一）
-    final AtomicReference<TcpChannel> produced = new AtomicReference<>();
+    final CompletionService<Pair<TcpChannel, Integer>> completion = new ExecutorCompletionService<>(exec);
+    // 唯一登记的"已可用"连接：只有第一个通过认证的任务能登记（CAS 保证唯一）
+    final AtomicReference<Pair<TcpChannel, Integer>> produced = new AtomicReference<>();
     final AtomicBoolean abandoned = new AtomicBoolean(false);
     final long overallTimeoutMs = 4500;
     final long deadline = System.nanoTime() + overallTimeoutMs * 1_000_000L;
@@ -120,28 +129,32 @@ public class Adb {
       final String a = addr;
       completion.submit(() -> {
         if (abandoned.get()) return null;
+        TcpChannel ch = null;
         try {
           Pair<String, Integer> p = PublicTools.getIpAndPort(a);
-          TcpChannel ch = new TcpChannel(p.first, p.second, test);
-          if (!produced.compareAndSet(null, ch)) {
-            ch.close(); // 已经有更早连上的连接了
+          ch = new TcpChannel(p.first, p.second, test);
+          final TcpChannel channel = ch;
+          Pair<TcpChannel, Integer> ok = new Pair<>(ch, authChannel(ch, keyPair));
+          if (!produced.compareAndSet(null, ok)) {
+            channel.close(); // 已经有更早可用的连接了
             return null;
           }
           // 登记后若发现主流程已放弃，则由本线程负责关闭，避免泄漏
-          if (abandoned.get() && produced.compareAndSet(ch, null)) ch.close();
-          return ch;
+          if (abandoned.get() && produced.compareAndSet(ok, null)) channel.close();
+          return ok;
         } catch (Exception ignored) {
+          if (ch != null) ch.close(); // TCP 通了但认证失败：必须释放
           return null;
         }
       });
     }
 
-    TcpChannel winner = null;
+    Pair<TcpChannel, Integer> winner = null;
     try {
       for (int i = 0; i < addresses.size(); i++) {
         long remainingMs = (deadline - System.nanoTime()) / 1_000_000L;
         if (remainingMs <= 0) break;
-        Future<TcpChannel> f;
+        Future<Pair<TcpChannel, Integer>> f;
         try {
           f = completion.poll(remainingMs, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
@@ -150,8 +163,8 @@ public class Adb {
         }
         if (f == null) break; // 已到全局 deadline
         try {
-          TcpChannel r = f.get();
-          if (r != null) { winner = r; break; } // 最早完成且成功者
+          Pair<TcpChannel, Integer> r = f.get();
+          if (r != null) { winner = r; break; } // 最早"TCP + ADB"都通的地址
         } catch (CancellationException | ExecutionException ignored) {
           // 该地址失败：继续等下一个完成者
         }
@@ -159,34 +172,47 @@ public class Adb {
     } finally {
       abandoned.set(true); // 先标记放弃，此后新建连接的线程会自行 close
       exec.shutdownNow();
-      // 兜底：若在放弃瞬间刚好有连接建立成功，要么采纳、要么关闭，二者必居其一
-      TcpChannel late = produced.getAndSet(null);
+      // 兜底：若在放弃瞬间刚好有连接完成认证，要么采纳、要么关闭，二者必居其一
+      Pair<TcpChannel, Integer> late = produced.getAndSet(null);
       if (late != null && late != winner) {
         if (winner == null) winner = late; // 临界时刻连上的，直接采用
-        else late.close();
+        else late.first.close();
       }
     }
     if (winner != null) return winner;
-    throw new IOException("all addresses unreachable: " + addresses);
+    throw new IOException("all addresses unusable (tcp+adb): " + addresses);
+  }
+
+  // 在通道上完成 ADB 握手认证，返回 CNXN 协商出的 maxData。失败抛异常（由调用方负责关闭通道）
+  private static int authChannel(AdbChannel ch, AdbKeyPair keyPair) throws Exception {
+    // 连接ADB并认证
+    ch.write(AdbProtocol.generateConnect());
+    AdbProtocol.AdbMessage message = AdbProtocol.AdbMessage.parseAdbMessage(ch);
+    if (message.command == AdbProtocol.CMD_AUTH) {
+      ch.write(AdbProtocol.generateAuth(AdbProtocol.AUTH_TYPE_SIGNATURE, keyPair.signPayload(message.payload)));
+      message = AdbProtocol.AdbMessage.parseAdbMessage(ch);
+      if (message.command == AdbProtocol.CMD_AUTH) {
+        ch.write(AdbProtocol.generateAuth(AdbProtocol.AUTH_TYPE_RSA_PUBLIC, keyPair.publicKeyBytes));
+        message = AdbProtocol.AdbMessage.parseAdbMessage(ch);
+      }
+    }
+    if (message.command != AdbProtocol.CMD_CNXN) throw new Exception("ADB connect error");
+    return message.arg1;
   }
 
   private void connect(AdbKeyPair keyPair) throws Exception {
-    // 连接ADB并认证
-    channel.write(AdbProtocol.generateConnect());
-    AdbProtocol.AdbMessage message = AdbProtocol.AdbMessage.parseAdbMessage(channel);
-    if (message.command == AdbProtocol.CMD_AUTH) {
-      channel.write(AdbProtocol.generateAuth(AdbProtocol.AUTH_TYPE_SIGNATURE, keyPair.signPayload(message.payload)));
-      message = AdbProtocol.AdbMessage.parseAdbMessage(channel);
-      if (message.command == AdbProtocol.CMD_AUTH) {
-        channel.write(AdbProtocol.generateAuth(AdbProtocol.AUTH_TYPE_RSA_PUBLIC, keyPair.publicKeyBytes));
-        message = AdbProtocol.AdbMessage.parseAdbMessage(channel);
-      }
-    }
-    if (message.command != AdbProtocol.CMD_CNXN) {
+    try {
+      MAX_DATA = authChannel(channel, keyPair);
+    } catch (Exception e) {
+      // 认证失败：先释放通道再抛出（TCP 通但 ADB 不可用时不能留下半开连接）
       channel.close();
-      throw new Exception("ADB connect error");
+      throw e;
     }
-    MAX_DATA = message.arg1;
+    finishConnect();
+  }
+
+  // 认证通过后的收尾：测试模式（uuid == null）只做连通性验证随后关闭；否则启动收发线程
+  private void finishConnect() {
     if (uuid == null) {
       channel.close();
       return;
