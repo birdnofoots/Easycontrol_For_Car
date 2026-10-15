@@ -9,14 +9,17 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionService;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import android.util.Pair;
 import top.eiyooooo.easycontrol.app.BuildConfig;
@@ -85,10 +88,17 @@ public class Adb {
     startServerThread.start();
   }
 
-  // 并行尝试多个地址，返回第一个成功建立的 TcpChannel，全部失败则抛异常。
+  // 并行尝试多个地址，返回最早成功建立的 TcpChannel，全部失败则抛异常。
+  //
+  // 关键：必须"先完成者优先"，不能按列表顺序等待。
+  // 经验数据（真机实测）：列表第 1 个地址不可达时，TCP 失败要耗近 4s
+  // （No route to host 也要等到内核超时）；若按提交顺序逐个 get()，
+  // 就会被这个不可达地址拖住近 4s，而 Client 的连接看门狗只有 5s，
+  // 后面本可 0.1s 连上的地址也来不及用 —— 表现为"第一个地址不通就整体连不上"。
+  // 改用 ExecutorCompletionService，谁先连上就用谁（通常 0.1~1.5s）。
+  //
   // - 单地址走原路径，避免线程开销
-  // - 多地址并行尝试，整体延迟 = max(单个超时)，而非 sum
-  // - 全局 deadline 6s（略大于 TcpChannel 自身 5s），所有 future 共享同一截止时间
+  // - 全局 deadline 4.5s（小于看门狗 5s），所有任务共享同一截止时间
   // - 放弃等待后仍可能有线程建连成功，必须显式关闭，否则 socket 泄漏
   private static TcpChannel tryConnectAny(List<String> addresses, boolean test) throws Exception {
     if (addresses == null || addresses.isEmpty()) {
@@ -99,56 +109,61 @@ public class Adb {
       return new TcpChannel(p.first, p.second, test);
     }
     final ExecutorService exec = Executors.newCachedThreadPool();
-    final List<Future<TcpChannel>> futures = new ArrayList<>();
-    final AtomicBoolean done = new AtomicBoolean(false);
-    final long overallTimeoutMs = 6000;
+    final CompletionService<TcpChannel> completion = new ExecutorCompletionService<>(exec);
+    // 唯一登记的"已连上"连接：只有第一个成功的任务能登记（CAS 保证唯一）
+    final AtomicReference<TcpChannel> produced = new AtomicReference<>();
+    final AtomicBoolean abandoned = new AtomicBoolean(false);
+    final long overallTimeoutMs = 4500;
     final long deadline = System.nanoTime() + overallTimeoutMs * 1_000_000L;
+
     for (String addr : addresses) {
       final String a = addr;
-      futures.add(exec.submit(() -> {
-        if (done.get()) return null;
+      completion.submit(() -> {
+        if (abandoned.get()) return null;
         try {
           Pair<String, Integer> p = PublicTools.getIpAndPort(a);
           TcpChannel ch = new TcpChannel(p.first, p.second, test);
-          if (done.compareAndSet(false, true)) {
-            return ch; // 第一个建立成功的连接
+          if (!produced.compareAndSet(null, ch)) {
+            ch.close(); // 已经有更早连上的连接了
+            return null;
           }
-          ch.close(); // 别人抢先了，或主流程已放弃 -> 必须关闭
-          return null;
+          // 登记后若发现主流程已放弃，则由本线程负责关闭，避免泄漏
+          if (abandoned.get() && produced.compareAndSet(ch, null)) ch.close();
+          return ch;
         } catch (Exception ignored) {
           return null;
         }
-      }));
+      });
     }
+
     TcpChannel winner = null;
     try {
-      for (Future<TcpChannel> f : futures) {
-        long remainingMs = Math.max(1L, (deadline - System.nanoTime()) / 1_000_000L);
+      for (int i = 0; i < addresses.size(); i++) {
+        long remainingMs = (deadline - System.nanoTime()) / 1_000_000L;
+        if (remainingMs <= 0) break;
+        Future<TcpChannel> f;
         try {
-          TcpChannel r = f.get(remainingMs, TimeUnit.MILLISECONDS);
-          if (r != null) { winner = r; break; }
-        } catch (TimeoutException e) {
-          break; // 已到全局 deadline，不再等待后续 future
-        } catch (ExecutionException ignored) {
-          // 单个地址失败：尝试下一个
+          f = completion.poll(remainingMs, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt(); // 保留中断标志，不吞掉
           break;
         }
+        if (f == null) break; // 已到全局 deadline
+        try {
+          TcpChannel r = f.get();
+          if (r != null) { winner = r; break; } // 最早完成且成功者
+        } catch (CancellationException | ExecutionException ignored) {
+          // 该地址失败：继续等下一个完成者
+        }
       }
     } finally {
-      done.set(true); // 关键：先标记放弃，此后新建连接的线程会自行 close
-      for (Future<TcpChannel> f : futures) f.cancel(true);
+      abandoned.set(true); // 先标记放弃，此后新建连接的线程会自行 close
       exec.shutdownNow();
-      // 回收"取消时已在途、取消不生效"的连接：扫描已完成但未被采纳的 channel
-      for (Future<TcpChannel> f : futures) {
-        if (f.isDone() && !f.isCancelled()) {
-          try {
-            TcpChannel extra = f.get(); // isDone() 已保证立即返回，无需 getNow
-            if (extra != null && extra != winner) extra.close();
-          } catch (Exception ignored) {
-          }
-        }
+      // 兜底：若在放弃瞬间刚好有连接建立成功，要么采纳、要么关闭，二者必居其一
+      TcpChannel late = produced.getAndSet(null);
+      if (late != null && late != winner) {
+        if (winner == null) winner = late; // 临界时刻连上的，直接采用
+        else late.close();
       }
     }
     if (winner != null) return winner;
