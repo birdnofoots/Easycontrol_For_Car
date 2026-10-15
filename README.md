@@ -79,14 +79,19 @@
 
 | 来源 | 链接 | 说明 |
 |---|---|---|
-| **Release（推荐）** | [v1.7.1](https://github.com/birdnofoots/Easycontrol_For_Car/releases/tag/v1.7.1) | `versionCode 10701` / `versionName 1.7.1` |
-| 直接下载（release） | [Easycontrol_For_Car-v1.7.1-release.apk](https://github.com/birdnofoots/Easycontrol_For_Car/releases/download/v1.7.1/Easycontrol_For_Car-v1.7.1-release.apk) | `debuggable=false`，**推荐** |
-| 直接下载（debug） | [Easycontrol_For_Car-v1.7.1-debug.apk](https://github.com/birdnofoots/Easycontrol_For_Car/releases/download/v1.7.1/Easycontrol_For_Car-v1.7.1-debug.apk) | 含调试特性 |
-| 旧版本 v1.7.0 | [v1.7.0](https://github.com/birdnofoots/Easycontrol_For_Car/releases/tag/v1.7.0) | ⚠️ 多地址连接有缺陷，见下 |
+| **Release（推荐）** | [v1.7.2](https://github.com/birdnofoots/Easycontrol_For_Car/releases/tag/v1.7.2) | `versionCode 10702` / `versionName 1.7.2` |
+| 直接下载（release） | [Easycontrol_For_Car-v1.7.2-release.apk](https://github.com/birdnofoots/Easycontrol_For_Car/releases/download/v1.7.2/Easycontrol_For_Car-v1.7.2-release.apk) | `debuggable=false`，**推荐** |
+| 直接下载（debug） | [Easycontrol_For_Car-v1.7.2-debug.apk](https://github.com/birdnofoots/Easycontrol_For_Car/releases/download/v1.7.2/Easycontrol_For_Car-v1.7.2-debug.apk) | 含调试特性 |
+| 旧版本 | [v1.7.1](https://github.com/birdnofoots/Easycontrol_For_Car/releases/tag/v1.7.1) · [v1.7.0](https://github.com/birdnofoots/Easycontrol_For_Car/releases/tag/v1.7.0) | ⚠️ 地址池均有缺陷，见下 |
 | CI 最新构建 | [Actions](https://github.com/birdnofoots/Easycontrol_For_Car/actions) | 每次构建产物，artifact 保留 14 天 |
 
-> ⚠️ **v1.7.0 的已知缺陷**：地址池里如果**第一个地址不可达**，即使后面有能连上的地址也不会连接
-> （只能把可用地址放到第一行，等于退化成单地址）。已在 **v1.7.1 修复**，请升级。
+> ⚠️ **已知缺陷（v1.7.2 已修复）**
+> - v1.7.0 / v1.7.1：地址池里若**第一个地址不可达**，即使后面有可用地址也不会连接
+>   （只能把可用地址放第一行，等价于退化成单地址）
+> - v1.7.1 额外问题：只按"**谁先 TCP 连上**"选地址；若选中的地址
+>   **TCP 通但 ADB 握手失败**（例如被容器/VPN 接管的网段、MTU 黑洞），
+>   会直接失败且**不回落到其它地址**
+> - v1.7.2 起：把 **ADB 认证也纳入并行竞速**，只有"TCP + ADB 都通"的地址才会被选中
 
 #### 🔐 签名
 
@@ -154,7 +159,16 @@
 - 🐛 release 关闭 R8 混淆：真机实测混淆后启动即崩（`MainActivity.onPause()` NPE），
   本项目依赖 hidden API bypass / 反射，混淆风险高，暂不开启
 
-### v1.7.1 (2026-10-16)
+### v1.7.2 (2026-10-16)
+- 🐛 **修复地址池回退缺陷（关键）**：原实现只按"谁先完成 TCP 连接"选地址，
+  ADB 认证发生在选中之后。若选中的地址 TCP 通但 ADB 不能握手
+  （实测：走容器/VPN 接管的网段时表现为 `adb: device offline`），
+  会直接失败且**不会回落到其它地址** —— 地址池里只要有这类"半通"地址就会时好时坏。
+  现把 **ADB 认证放进并行竞速**，只有认证也通过的地址才算可用；认证失败即释放连接。
+- 🔍 定位方法：用应用自身的 ADB 密钥在手机上逐条实测地址，并用 `ss`/`dumpsys window` 观察
+- 🔢 versionCode 10701 → 10702
+
+### v1.7.1 (2026-10-16)（⚠️ 地址池仍有缺陷，建议用 v1.7.2）
 - 🐛 **修复多地址连接缺陷**：原实现并行发起连接，但主流程**按列表顺序**等待结果，
   会被排在前面的不可达地址拖住（真机实测约 3.9s），超过连接看门狗（5s）导致
   "第一个地址不通就整体连不上"。现改为**先完成者优先**（ExecutorCompletionService）：
