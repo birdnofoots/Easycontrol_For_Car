@@ -144,7 +144,7 @@ public class Adb {
       for (Future<TcpChannel> f : futures) {
         if (f.isDone() && !f.isCancelled()) {
           try {
-            TcpChannel extra = f.getNow(null);
+            TcpChannel extra = f.get(); // isDone() 已保证立即返回，无需 getNow
             if (extra != null && extra != winner) extra.close();
           } catch (Exception ignored) {
           }
