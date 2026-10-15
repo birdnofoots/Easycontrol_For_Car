@@ -79,10 +79,14 @@
 
 | 来源 | 链接 | 说明 |
 |---|---|---|
-| **Release（推荐）** | [v1.7.0](https://github.com/birdnofoots/Easycontrol_For_Car/releases/tag/v1.7.0) | `versionCode 10700` / `versionName 1.7.0` |
-| 直接下载（release） | [Easycontrol_For_Car-v1.7.0-release.apk](https://github.com/birdnofoots/Easycontrol_For_Car/releases/download/v1.7.0/Easycontrol_For_Car-v1.7.0-release.apk) | `debuggable=false`，4.3 MB，**推荐** |
-| 直接下载（debug） | [Easycontrol_For_Car-v1.7.0-debug.apk](https://github.com/birdnofoots/Easycontrol_For_Car/releases/download/v1.7.0/Easycontrol_For_Car-v1.7.0-debug.apk) | 含调试特性，4.9 MB |
+| **Release（推荐）** | [v1.7.1](https://github.com/birdnofoots/Easycontrol_For_Car/releases/tag/v1.7.1) | `versionCode 10701` / `versionName 1.7.1` |
+| 直接下载（release） | [Easycontrol_For_Car-v1.7.1-release.apk](https://github.com/birdnofoots/Easycontrol_For_Car/releases/download/v1.7.1/Easycontrol_For_Car-v1.7.1-release.apk) | `debuggable=false`，**推荐** |
+| 直接下载（debug） | [Easycontrol_For_Car-v1.7.1-debug.apk](https://github.com/birdnofoots/Easycontrol_For_Car/releases/download/v1.7.1/Easycontrol_For_Car-v1.7.1-debug.apk) | 含调试特性 |
+| 旧版本 v1.7.0 | [v1.7.0](https://github.com/birdnofoots/Easycontrol_For_Car/releases/tag/v1.7.0) | ⚠️ 多地址连接有缺陷，见下 |
 | CI 最新构建 | [Actions](https://github.com/birdnofoots/Easycontrol_For_Car/actions) | 每次构建产物，artifact 保留 14 天 |
+
+> ⚠️ **v1.7.0 的已知缺陷**：地址池里如果**第一个地址不可达**，即使后面有能连上的地址也不会连接
+> （只能把可用地址放到第一行，等于退化成单地址）。已在 **v1.7.1 修复**，请升级。
 
 #### 🔐 签名
 
@@ -150,7 +154,16 @@
 - 🐛 release 关闭 R8 混淆：真机实测混淆后启动即崩（`MainActivity.onPause()` NPE），
   本项目依赖 hidden API bypass / 反射，混淆风险高，暂不开启
 
-### v1.6.10 — 原版基线
+### v1.7.1 (2026-10-16)
+- 🐛 **修复多地址连接缺陷**：原实现并行发起连接，但主流程**按列表顺序**等待结果，
+  会被排在前面的不可达地址拖住（真机实测约 3.9s），超过连接看门狗（5s）导致
+  "第一个地址不通就整体连不上"。现改为**先完成者优先**（ExecutorCompletionService）：
+  - 真机实测对照（同一网络、同一地址列表，仅改等待策略）：`3233 ms` → `9 ms`
+  - 全局等待上限由 6s 收紧到 4.5s，保证失败路径可预期
+- 🐛 收紧连接登记与回收逻辑（AtomicReference 唯一登记），避免放弃等待瞬间的 socket 泄漏
+- 🔢 versionCode 10700 → 10701
+
+### v1.7.0 — 本 fork 版本（⚠️ 多地址连接有缺陷，建议用 v1.7.1）
 - 来自上游 [eiyooooo/Easycontrol_For_Car](https://github.com/eiyooooo/Easycontrol_For_Car) 同步
 
 ---
