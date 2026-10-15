@@ -8,7 +8,6 @@ import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -30,7 +29,8 @@ import top.eiyooooo.easycontrol.app.helper.L;
 import top.eiyooooo.easycontrol.app.helper.PublicTools;
 
 public class Adb {
-  public static final HashMap<String, Adb> adbMap = new HashMap<>();
+  // 多线程读写（连接检查线程/Client 线程/UI 线程），必须用并发安全容器
+  public static final ConcurrentHashMap<String, Adb> adbMap = new ConcurrentHashMap<>();
 
   private final AdbChannel channel;
   private int localIdPool = 1;
@@ -88,7 +88,8 @@ public class Adb {
   // 并行尝试多个地址，返回第一个成功建立的 TcpChannel，全部失败则抛异常。
   // - 单地址走原路径，避免线程开销
   // - 多地址并行尝试，整体延迟 = max(单个超时)，而非 sum
-  // - 整体超时设为 6s（略大于 TcpChannel 自身 5s）
+  // - 全局 deadline 6s（略大于 TcpChannel 自身 5s），所有 future 共享同一截止时间
+  // - 放弃等待后仍可能有线程建连成功，必须显式关闭，否则 socket 泄漏
   private static TcpChannel tryConnectAny(List<String> addresses, boolean test) throws Exception {
     if (addresses == null || addresses.isEmpty()) {
       throw new IOException("no address available");
@@ -101,6 +102,7 @@ public class Adb {
     final List<Future<TcpChannel>> futures = new ArrayList<>();
     final AtomicBoolean done = new AtomicBoolean(false);
     final long overallTimeoutMs = 6000;
+    final long deadline = System.nanoTime() + overallTimeoutMs * 1_000_000L;
     for (String addr : addresses) {
       final String a = addr;
       futures.add(exec.submit(() -> {
@@ -111,26 +113,45 @@ public class Adb {
           if (done.compareAndSet(false, true)) {
             return ch; // 第一个建立成功的连接
           }
-          ch.close(); // 别人抢先了
+          ch.close(); // 别人抢先了，或主流程已放弃 -> 必须关闭
           return null;
         } catch (Exception ignored) {
           return null;
         }
       }));
     }
+    TcpChannel winner = null;
     try {
       for (Future<TcpChannel> f : futures) {
+        long remainingMs = Math.max(1L, (deadline - System.nanoTime()) / 1_000_000L);
         try {
-          TcpChannel r = f.get(overallTimeoutMs, TimeUnit.MILLISECONDS);
-          if (r != null) return r;
-        } catch (TimeoutException | ExecutionException | InterruptedException ignored) {
-          // 单个 future 超时或失败：尝试下一个
+          TcpChannel r = f.get(remainingMs, TimeUnit.MILLISECONDS);
+          if (r != null) { winner = r; break; }
+        } catch (TimeoutException e) {
+          break; // 已到全局 deadline，不再等待后续 future
+        } catch (ExecutionException ignored) {
+          // 单个地址失败：尝试下一个
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt(); // 保留中断标志，不吞掉
+          break;
         }
       }
     } finally {
+      done.set(true); // 关键：先标记放弃，此后新建连接的线程会自行 close
       for (Future<TcpChannel> f : futures) f.cancel(true);
       exec.shutdownNow();
+      // 回收"取消时已在途、取消不生效"的连接：扫描已完成但未被采纳的 channel
+      for (Future<TcpChannel> f : futures) {
+        if (f.isDone() && !f.isCancelled()) {
+          try {
+            TcpChannel extra = f.getNow(null);
+            if (extra != null && extra != winner) extra.close();
+          } catch (Exception ignored) {
+          }
+        }
+      }
     }
+    if (winner != null) return winner;
     throw new IOException("all addresses unreachable: " + addresses);
   }
 

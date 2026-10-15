@@ -139,9 +139,11 @@ public class Client {
 
   // 连接ADB
   private static Adb connectADB(Device device, UsbDevice usbDevice) throws Exception {
-    if (Adb.adbMap.containsKey(device.uuid)) return Adb.adbMap.get(device.uuid);
+    // 单次 get 代替 containsKey+get（避免两次查找间的竞态拿到 null）
+    Adb existing = Adb.adbMap.get(device.uuid);
+    if (existing != null) return existing;
     Adb adb;
-    if (usbDevice == null) adb = new Adb(device.uuid, device.addresses, AppData.keyPair);
+    if (usbDevice == null) adb = new Adb(device.uuid, device.getAddresses(), AppData.keyPair);
     else adb = new Adb(device.uuid, usbDevice, AppData.keyPair);
     Adb.adbMap.put(device.uuid, adb);
     return adb;
@@ -433,7 +435,7 @@ public class Client {
     try {
       if (Adb.adbMap.get(device.uuid) == null) {
         if (device.isLinkDevice()) Adb.adbMap.put(device.uuid, new Adb(device.uuid, usbDevice, AppData.keyPair));
-        else Adb.adbMap.put(device.uuid, new Adb(device.uuid, device.addresses, AppData.keyPair));
+        else Adb.adbMap.put(device.uuid, new Adb(device.uuid, device.getAddresses(), AppData.keyPair));
       }
       ArrayList<String> appList = new ArrayList<>();
       String output = Adb.getStringResponseFromServer(device, "getAllAppInfo", "app_type=1");

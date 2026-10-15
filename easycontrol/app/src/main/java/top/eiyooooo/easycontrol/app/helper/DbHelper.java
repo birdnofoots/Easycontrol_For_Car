@@ -36,32 +36,47 @@ public class DbHelper extends SQLiteOpenHelper {
   @SuppressLint("Range")
   @Override
   public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-    if (oldVersion < 20) {
-      // 旧库 -> 新库：为已存在的设备表加上 addresses 列，并把旧 address 包装成单元素 JSON 数组
-      try {
-        db.execSQL("ALTER TABLE " + tableName + " ADD COLUMN addresses text");
-      } catch (Exception ignored) {
-        // 已存在 addresses 列时忽略
-      }
-      // 把每条记录的旧 address 写入 addresses（JSON 数组）
-      Cursor cursor = db.query(tableName, new String[]{"uuid", "address"}, null, null, null, null, null);
-      if (cursor != null) {
-        try {
-          while (cursor.moveToNext()) {
-            String uuid = cursor.getString(0);
-            String address = cursor.getString(1);
-            JSONArray arr = new JSONArray();
-            if (address != null && !address.trim().isEmpty()) {
-              arr.put(address);
-            }
-            ContentValues v = new ContentValues();
-            v.put("addresses", arr.toString());
-            db.update(tableName, v, "uuid=?", new String[]{uuid});
-          }
-        } finally {
-          cursor.close();
-        }
-      }
+    // 沿用原版"整表重建"策略升级任意旧版本：
+    // 1) 重建会自动补齐历史版本缺失的列（单纯 ALTER 无法覆盖多个版本累积的列变更）
+    // 2) 重建走 getValues()，会同步写入新列 addresses(JSON)，无需单独回填
+    if (oldVersion < version) {
+      // 获取旧数据（读取时缺列由 getDeviceFormCursor 的 -1 判断兜底）
+      ArrayList<Device> devices = getAll(db);
+      // 修改表名
+      db.execSQL("alter table " + tableName + " rename to tempTable");
+      // 新建新表
+      onCreate(db);
+      // 将数据搬移至新表
+      for (Device device : devices) db.insert(tableName, null, getValues(device));
+      // 删除旧表
+      db.execSQL("drop table tempTable");
+    }
+  }
+
+  // 降级保护：SQLiteOpenHelper 默认实现会直接抛异常，导致降级安装后启动即崩。
+  // 这里重建表结构并尽量保留设备数据（如从高版本 fork 回退到低版本）。
+  @Override
+  public void onDowngrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+    ArrayList<Device> devices = new ArrayList<>();
+    ArrayList<MonitorEvent> events = new ArrayList<>();
+    try {
+      devices = getAll(db);
+    } catch (Exception ignored) {
+    }
+    try {
+      events = getAllMonitorEvents(db);
+    } catch (Exception ignored) {
+    }
+    db.execSQL("drop table if exists " + tableName);
+    db.execSQL("drop table if exists " + monitorTableName);
+    onCreate(db);
+    try {
+      for (Device device : devices) db.insert(tableName, null, getValues(device));
+    } catch (Exception ignored) {
+    }
+    try {
+      for (MonitorEvent event : events) db.insert(monitorTableName, null, getValues(event));
+    } catch (Exception ignored) {
     }
   }
 
@@ -151,10 +166,12 @@ public class DbHelper extends SQLiteOpenHelper {
     values.put("type", device.type);
     values.put("name", device.name);
     values.put("isAudio", device.isAudio);
+    // 兜底同步：防止绕过 setter 直接改字段导致 address/addresses 不一致
+    device.syncAddressFromAddresses();
     // 兼容字段：永远写第一个地址
     values.put("address", device.address == null ? "" : device.address);
     // 新字段：写 JSON 数组
-    values.put("addresses", encodeAddressesJson(device.addresses));
+    values.put("addresses", encodeAddressesJson(device.getAddresses()));
     values.put("specified_app", device.specified_app);
     values.put("maxSize", device.maxSize);
     values.put("maxFps", device.maxFps);

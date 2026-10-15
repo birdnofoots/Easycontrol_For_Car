@@ -208,7 +208,6 @@ public class PublicTools {
     // ========== 多地址列表：动态构建行 ==========
     // 收集初始地址（兼容旧 device.address 单字段）
     final java.util.List<EditText> addressEdits = new java.util.ArrayList<>();
-    final java.util.List<Button> removeButtons = new java.util.ArrayList<>();
     final LinearLayout addressList = itemAddDeviceBinding.addressList;
     addressList.removeAllViews();
 
@@ -225,7 +224,8 @@ public class PublicTools {
       EditText edit = new EditText(context);
       LinearLayout.LayoutParams editLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 5f);
       edit.setLayoutParams(editLp);
-      // 限定可输入字符：数字、字母、[]-.:* 和下划线（与旧地址框一致 + 下划线/中文域名）
+      // 限定可输入字符：数字、字母、[]-.:*_/（在旧字符集基础上增加下划线和斜杠）
+      // 注意：未放开中文字符，IDN 中文域名无法直接输入
       edit.setKeyListener(android.text.method.DigitsKeyListener.getInstance("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ[]-.:*_/"));
       edit.setTextColor(context.getResources().getColor(R.color.onCardBackground));
       edit.setHint(context.getString(R.string.add_device_address_hint));
@@ -252,17 +252,16 @@ public class PublicTools {
         }
         addressList.removeView(row);
         addressEdits.remove(edit);
-        removeButtons.remove(remove);
       });
       row.addView(remove);
-      removeButtons.add(remove);
       addressList.addView(row);
     };
 
     // 初始化行
     java.util.List<String> initial = new java.util.ArrayList<>();
-    if (device.addresses != null && !device.addresses.isEmpty()) {
-      initial.addAll(device.addresses);
+    java.util.List<String> existingAddrs = device.getAddresses();
+    if (!existingAddrs.isEmpty()) {
+      initial.addAll(existingAddrs);
     } else if (device.address != null && !device.address.isEmpty()) {
       initial.add(device.address);
     }
@@ -374,10 +373,10 @@ public class PublicTools {
           Toast.makeText(context, context.getString(R.string.add_device_address_required), Toast.LENGTH_SHORT).show();
           return;
         }
-        // 检查地址变化，若变了则断开现有连接（用第一个地址作比较保持兼容）
-        String firstNew = newAddrs.get(0);
-        if (Adb.adbMap.containsKey(device.uuid) && !Objects.equals(firstNew, device.address)) {
-          Objects.requireNonNull(Adb.adbMap.get(device.uuid)).close();
+        // 检查地址变化：比较完整列表（只比第一个会漏掉"后续地址增删改"的情况）
+        if (!device.getAddresses().equals(newAddrs)) {
+          Adb old = Adb.adbMap.get(device.uuid);
+          if (old != null) old.close();
         }
         device.setAddresses(newAddrs); // 同时更新 address 与 addresses
       }

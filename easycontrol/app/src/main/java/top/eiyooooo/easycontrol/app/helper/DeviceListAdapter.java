@@ -218,8 +218,8 @@ public class DeviceListAdapter extends BaseExpandableListAdapter {
             Adb.adbMap.put(device.uuid, adb);
           }
           else {
-            new Adb(device.addresses, AppData.keyPair);
-            Adb adb = new Adb(device.uuid, device.addresses, AppData.keyPair);
+            new Adb(device.getAddresses(), AppData.keyPair);
+            Adb adb = new Adb(device.uuid, device.getAddresses(), AppData.keyPair);
             Adb.adbMap.put(device.uuid, adb);
           }
         }

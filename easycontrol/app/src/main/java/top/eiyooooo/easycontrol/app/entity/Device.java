@@ -14,7 +14,8 @@ public class Device {
   // 兼容字段：始终等于 addresses[0]（若 addresses 非空）。旧代码可继续读写。
   public String address;
   // 新字段：地址/域名池，按顺序逐个尝试连接，首个成功即用。
-  public List<String> addresses = new ArrayList<>();
+  // 私有化：必须经 addAddress/removeAddress/setAddresses 修改，保证与 address 同步。
+  private List<String> addresses = new ArrayList<>();
   public String specified_app;
   public boolean isAudio;
   public int maxSize;
@@ -171,10 +172,11 @@ public class Device {
     syncAddressFromAddresses();
   }
 
-  // 不可变副本（用于安全遍历）
+  // 返回不可变副本：遍历期间列表被修改也不会抛 ConcurrentModificationException，
+  // 且外部拿到的是副本，改动不会绕过同步逻辑影响内部状态。
   public List<String> getAddresses() {
     if (addresses == null) return Collections.emptyList();
-    return Collections.unmodifiableList(addresses);
+    return Collections.unmodifiableList(new ArrayList<>(addresses));
   }
 
   private static List<String> toList(String address) {
@@ -191,7 +193,7 @@ public class Device {
     if (source.addresses != null) {
       target.addresses = new ArrayList<>(source.addresses);
     } else {
-      target.addresses = new ArrayList<>();
+      target.addresses = toList(source.address);
     }
     target.specified_app = source.specified_app;
     target.isAudio = source.isAudio;
@@ -230,7 +232,6 @@ public class Device {
 
   public static Device getDefaultDevice(String uuid, int type) {
     Device d = new Device(uuid, type, uuid, "", "", AppData.setting.getDefaultIsAudio(), AppData.setting.getDefaultMaxSize(), AppData.setting.getDefaultMaxFps(), AppData.setting.getDefaultMaxVideoBit(), AppData.setting.getDefaultSetResolution(), AppData.setting.getDefaultFull(), AppData.setting.getDefaultUseH265(), AppData.setting.getDefaultUseOpus(), false, AppData.setting.getDefaultClipboardSync(), AppData.setting.getDefaultNightModeSync(), SMALL_X, SMALL_Y, SMALL_WIDTH, SMALL_HEIGHT, SMALL_X, SMALL_Y, SMALL_WIDTH, SMALL_HEIGHT, SMALL_X, SMALL_Y, SMALL_WIDTH, SMALL_HEIGHT, SMALL_X, SMALL_Y, SMALL_WIDTH, SMALL_HEIGHT, SMALL_X, SMALL_Y, SMALL_WIDTH, SMALL_HEIGHT, MINI_Y);
-    d.addresses = new ArrayList<>();
     return d;
   }
 

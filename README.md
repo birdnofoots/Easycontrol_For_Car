@@ -99,6 +99,14 @@
 - 🆕 数据库自动迁移（v19 → v20）
 - 🆕 兼容旧版本单地址数据
 - 🔧 升级 GitHub Actions：upload-artifact v2 → v4
+- 🛡️ 代码审查修复（2026-10-15）：
+  - 新增 `onDowngrade`：降级安装不再启动崩溃，并尽量保留设备数据
+  - `onUpgrade` 恢复整表重建策略：从更早历史版本升级不再因缺列崩溃
+  - `tryConnectAny` 改为全局 deadline 超时，放弃等待后回收在途连接（修 socket 泄漏）
+  - `Device.addresses` 私有化 + `getAddresses()` 返回副本（防绕过同步、防并发修改异常）
+  - `Adb.adbMap` 改用 `ConcurrentHashMap`；`copyDevice` 空列表回退到 `address`
+  - 保存设备时比较完整地址列表（原来只比第一个地址）
+  - versionCode/versionName 对齐 1.7.0 (10700)
 
 ### v1.6.10 — 原版基线
 - 来自上游 [eiyooooo/Easycontrol_For_Car](https://github.com/eiyooooo/Easycontrol_For_Car) 同步
