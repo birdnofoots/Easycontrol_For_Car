@@ -75,8 +75,26 @@
 
 ## 📥 安装包
 
-- **本 fork（含多地址功能）**: <https://github.com/birdnofoots/Easycontrol_For_Car/releases>
-- **原版**: <https://github.com/eiyooooo/Easycontrol_For_Car/releases>
+### 本 fork（含多地址功能 + 代码审查修复）
+
+| 来源 | 链接 | 说明 |
+|---|---|---|
+| **Release（推荐）** | [v1.7.0](https://github.com/birdnofoots/Easycontrol_For_Car/releases/tag/v1.7.0) | 稳定版，`versionCode 10700` / `versionName 1.7.0` |
+| 直接下载 APK | [Easycontrol_For_Car-v1.7.0-multiaddr-debug.apk](https://github.com/birdnofoots/Easycontrol_For_Car/releases/download/v1.7.0/Easycontrol_For_Car-v1.7.0-multiaddr-debug.apk) | debug 签名（debug keystore），可直接安装 |
+| CI 最新构建 | [Actions](https://github.com/birdnofoots/Easycontrol_For_Car/actions) | 每次构建产物，artifact 保留 14 天 |
+
+> ⚠️ 以上为 **debug 签名** 的构建。首次安装若已装过其它签名的同包名应用，需先卸载。
+> 如需正式签名版本，请参考 [HOW_TO_BUILD.md](./HOW_TO_BUILD.md) 自行编译并签名。
+
+### 原版
+
+- <https://github.com/eiyooooo/Easycontrol_For_Car/releases>
+
+### 🔄 升级 / 降级说明
+
+- **升级（V1.6.10 → V1.7.0）**：数据库自动迁移（v19 → v20），旧的单地址自动变为"单元素地址池"，无需手动操作
+- **降级（V1.7.0 → V1.6.10 等低版本）**：v1.7.0 已实现 `onDowngrade`，重建数据表且尽量保留设备配置，不会再启动崩溃
+- 跨版本回退前建议备份 `app.db`（位于应用私有目录）
 
 ## 📘 使用说明
 
