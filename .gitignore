@@ -18,3 +18,8 @@ gitkey*
 gitkey.txt
 API_KEY*
 secret*
+
+# Signing keystore（绝不可提交）
+*.jks
+*.keystore
+keystore*

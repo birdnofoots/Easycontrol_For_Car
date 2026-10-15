@@ -21,10 +21,32 @@ android {
     enabled = true
   }
 
+  // 固定签名：密钥库由环境变量注入（CI 里来自 GitHub Secrets）。
+  // 未提供时保持 AGP 默认行为（本地构建用随机 debug 密钥）。
+  // 注意：务必妥善备份 keystore，丢失后无法覆盖安装/升级。
+  signingConfigs {
+    release {
+      String ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
+      if (ksPath != null && !ksPath.isEmpty()) {
+        storeFile file(ksPath)
+        storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+        keyAlias System.getenv("ANDROID_KEY_ALIAS")
+        keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+        enableV1Signing true
+        enableV2Signing true
+        enableV3Signing true
+      }
+    }
+  }
+
   buildTypes {
     debug {
       buildConfigField "boolean", "ENABLE_DEBUG_FEATURE", "true"
       debuggable true
+      // 有固定密钥时 debug 也用同一密钥签名，保证与 release 包可互相覆盖安装
+      if (System.getenv("ANDROID_KEYSTORE_PATH")) {
+        signingConfig signingConfigs.release
+      }
     }
     release {
       buildConfigField "boolean", "ENABLE_DEBUG_FEATURE", "false"
@@ -32,6 +54,9 @@ android {
       minifyEnabled true
       shrinkResources true
       proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+      if (System.getenv("ANDROID_KEYSTORE_PATH")) {
+        signingConfig signingConfigs.release
+      }
     }
   }
 

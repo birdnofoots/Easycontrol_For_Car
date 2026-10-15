@@ -10,6 +10,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     steps:
     - name: Checkout the code
       uses: actions/checkout@v4
@@ -23,21 +27,45 @@ jobs:
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
 
+    # 注入固定签名密钥库（GitHub Secrets，AES 加密存储，不进仓库）
+    # 未配置时优雅降级为随机 debug 密钥（只是无法覆盖安装，构建仍可成功）
+    - name: Prepare signing keystore
+      env:
+        KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      run: |
+        if [ -n "$KS_B64" ]; then
+          printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          echo "OK: 使用固定密钥签名"
+        else
+          echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，将使用随机 debug 密钥（APK 之间无法互相覆盖安装）"
+        fi
+
     - name: Build the server
       working-directory: ./easycontrol
       run: |
         chmod +x gradlew
         ./gradlew :server:copyRelease --stacktrace
 
-    - name: Build the app (debug)
+    - name: Build the app (debug + release)
       working-directory: ./easycontrol
       run: |
-        ./gradlew :app:assembleDebug --stacktrace
+        ./gradlew :app:assembleDebug :app:assembleRelease --stacktrace
 
-    - name: Upload APK
+    - name: Print APK signature fingerprints
+      run: |
+        for f in ./easycontrol/app/build/outputs/apk/*/*.apk; do
+          [ -f "$f" ] || continue
+          echo "===== $f"
+          "$JAVA_HOME/bin/keytool" -printcert -jarfile "$f" 2>/dev/null | grep -E "SHA1:|SHA256:" | head -2
+        done
+
+    - name: Upload APKs
       uses: actions/upload-artifact@v4
       with:
-        name: app-debug
-        path: ./easycontrol/app/build/outputs/apk/debug/*.apk
+        name: app-apks
+        path: |
+          ./easycontrol/app/build/outputs/apk/debug/*.apk
+          ./easycontrol/app/build/outputs/apk/release/*.apk
         if-no-files-found: error
         retention-days: 14
